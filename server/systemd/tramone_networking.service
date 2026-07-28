@@ -1,0 +1,23 @@
+[Unit]
+Description=TRAMONE networking.py
+After=tramone_main.service
+Requires=tramone_main.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=notify
+WorkingDirectory=/home/pi/TRAMONE
+ExecStart=/usr/bin/python3 -u /home/pi/TRAMONE/networking.py
+Restart=always
+RestartSec=3
+WatchdogSec=300
+TimeoutStopSec=15
+KillSignal=SIGTERM
+KillMode=mixed
+#EnvironmentFile=/home/pi/TRAMONE/sampling_region_sites
+PassEnvironment=SAMPLING_REGIONS SAMPLING_SITES
+
+[Install]
+WantedBy=default.target

@@ -27,14 +27,14 @@ wind[,c(2:4,6,7)]=as.numeric(unlist(wind[,c(2:4,6,7)]))
 #wind=wind[which(!(wind$F==0&wind$D==0)),]
 wind$HOUR=as.numeric(substr(wind$TIME,1,2))
 wind$MINUTE=as.numeric(substr(wind$TIME,4,5))
-wind$date=ISOdate(wind$YEAR,wind$MONTH,wind$DAY,wind$HOUR,wind$MINUTE,tz="CET")
-#imported CLIDATA are in CET => conversion to UTC
+#imported CLIDATA are in CET => import and conversion to UTC
+wind$date=ISOdate(wind$YEAR,wind$MONTH,wind$DAY,wind$HOUR,wind$MINUTE,tz="Etc/GMT-1")
 wind$date=with_tz(wind$date,tzone="UTC")
 
 #filter only last from duplicite rows for each station
 wind=wind %>% group_by(EG_GH_ID) %>% slice_tail(n=1) %>% ungroup()
 
-maxdate=max(wind$date)
+maxdate=max(wind$date, na.rm=T)
 wind=wind %>% filter(date>maxdate-minutes(15))
 if (nrow(wind)<3) 
 {
@@ -47,7 +47,7 @@ if (nrow(wind)<3)
 #wind_time=max(wind$date)
 wind$u_wind=-wind$F*sin((wind$D+180)*pi/180)
 wind$v_wind=-wind$F*cos((wind$D+180)*pi/180)
-stanice=read.table(stanice,sep="",quote="",header=T, fill=T)
+stanice=read.table(stanice,sep=",",quote="",header=T, fill=T)
 data=left_join(wind,stanice,by=c("EG_GH_ID"="Gh_id"))
 data$Elevation=round(data$Elevation)
 data=data[,c("EG_GH_ID","D","F","u_wind","v_wind","east","north","Elevation","date")]

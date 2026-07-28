@@ -1,14 +1,7 @@
 #!/bin/bash
-TRAMONE_folder="/home/pi/TRAMONE"
-grassdb="grassdata"
-loc_jtsk="cr-jtsk"
-loc_wgs84="cr-wgs84"
-mapset="TRAMONE"
-base_map="bg_map_CR_grey" #raster map determining area and the resolution for trajectory computation 
-max_traj_time=43200 #seconds
-#repre_range=3000 #meters around monitoring sites
-#regions_vis=("3" "4") #regions for trajectory visualization (sub-regions of computing_area)
-dem="dem_CR_90m"
+#set -euo pipefail
+TRAMONE_folder="$HOME/TRAMONE"
+source "$TRAMONE_folder/tramone.cfg"
 
 ########################################################################
 # subroutines
@@ -28,27 +21,29 @@ wind_gridding() {
 	if [[ "$wind_head" != "$wind_head_prev" || "$wind_tail" != "$wind_tail_prev" ]]; then
 		wind_head_for_grid=$wind_head
 		wind_tail_for_grid=$wind_tail
-		grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.in.ascii -z input=${TRAMONE_folder}/wind.csv output=wind_tmp sep="," skip=1 x=6 y=7 z=8 columns="EG_GH_ID varchar(8),wd integer,ws real,u_wind real,v_wind real,x double,y double,elevation integer,date varchar(50)"
-		range_x=$(grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.db.univar map=wind_tmp column=x | grep "Range:" | awk '{print $2}')
-		range_y=$(grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.db.univar map=wind_tmp column=y | grep "Range:" | awk '{print $2}')
-		range_z=$(grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.db.univar map=wind_tmp column=elevation | grep "Range:" | awk '{print $2}')
+		flock -x "${TRAMONE_folder}/.wind_GIS_layers_lock" grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.in.ascii -z input=${TRAMONE_folder}/wind.csv output=wind sep="," skip=1 x=6 y=7 z=8 columns="EG_GH_ID varchar(8),wd integer,ws real,u_wind real,v_wind real,x double,y double,elevation integer,date varchar(50)"
+		range_x=$(grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.db.univar map=wind column=x | grep "Range:" | awk '{print $2}')
+		range_y=$(grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.db.univar map=wind column=y | grep "Range:" | awk '{print $2}')
+		range_z=$(grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.db.univar map=wind column=elevation | grep "Range:" | awk '{print $2}')
 		if (( $(echo "$range_x > $range_y" | bc -l) )); then
+			#scale_xy_z=$(echo "scale=6; $range_x / $range_z * 0.25"|bc)
 			scale_xy_z=$(echo "scale=6; $range_x / $range_z * 0.25"|bc)
 		else
+			#scale_xy_z=$(echo "scale=6; $range_y / $range_z * 0.25"|bc)
 			scale_xy_z=$(echo "scale=6; $range_y / $range_z * 0.25"|bc)
 		fi
 		#kill any unfinished gridding (in case of loop error)
 		if pgrep -f "v.vol.rst" > /dev/null; then
-			sudo pkill -f v.vol.rst
+			pkill -f v.vol.rst
 			sleep 0.5
 		fi
 		# 3D wind field gridding	
 		start_gridding_time=$(date +%s)
 		grass -f --text "${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset}" --exec bash -c "
-			g.region vect=computing_area_buf t=${dem_max} b=${dem_min} res=500 res3=500 tbres=125 -a -p -3
-			v.vol.rst input=wind_tmp cross_input=${dem} wcolumn=u_wind tension=20 smooth=0.01 zscale=${scale_xy_z} segmax=700 cross_output=u_wind_tmp elevation=u_wind_3D_tmp &
+			g.region vect=computing_area_buf t=${dem_max} b=${dem_min} res=400 res3=400 tbres=50 -a -p -3
+			v.vol.rst input=wind cross_input=${dem} wcolumn=u_wind tension=30 smooth=0.01 zscale=${scale_xy_z} segmax=700 cross_output=u_wind_tmp elevation=u_wind_3D_tmp &
 			pid1=\$!
-			v.vol.rst input=wind_tmp cross_input=${dem} wcolumn=v_wind tension=20 smooth=0.01 zscale=${scale_xy_z} segmax=700 cross_output=v_wind_tmp elevation=v_wind_3D_tmp &
+			v.vol.rst input=wind cross_input=${dem} wcolumn=v_wind tension=30 smooth=0.01 zscale=${scale_xy_z} segmax=700 cross_output=v_wind_tmp elevation=v_wind_3D_tmp &
 			pid2=\$!
 			wait \"\$pid1\" \"\$pid2\"
 			r.mapcalc expression=\"ws_tmp=if(sqrt(u_wind_tmp^2+v_wind_tmp^2)<0,0,sqrt(u_wind_tmp^2+v_wind_tmp^2))\" &
@@ -60,18 +55,19 @@ wind_gridding() {
 		"
 			
 		flock -x "${TRAMONE_folder}/.wind_GIS_layers_lock" grass -f --text "${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset}" --exec bash -c "
-			g.rename vector=wind_tmp,wind
+			#g.rename vector=wind_tmp,wind
+			#v.db.connect map=wind table=wind --overwrite
 			g.rename raster=u_wind_tmp,u_wind
 			g.rename raster=v_wind_tmp,v_wind
 			g.rename raster=ws_tmp,ws
 			g.rename raster=wd_tmp,wd
 			g.rename raster=wd_inv_tmp,wd_inv
 			
-			v.what.rast sampling_sites raster=ws column=ws
-			v.what.rast sampling_sites raster=wd column=wd
+			v.what.rast ${sampling_sites_map} raster=ws column=ws
+			v.what.rast ${sampling_sites_map} raster=wd column=wd
 		"
 
-		wind_to_log="$(grass -f --text "${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset}" --exec v.db.select sampling_sites column=site,ws,wd)"
+		wind_to_log="$(grass -f --text "${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset}" --exec v.db.select ${sampling_sites_map} column=site,ws,wd)"
 		out=""
 		skip_header=1
 		while IFS='|' read -r site ws wd; do
@@ -117,41 +113,39 @@ map_maker() {
 	export WIND_OVERRIDE=mapmaker_region_${region}
 	export GRASS_RENDER_FILE="${TRAMONE_folder}/${png_name}"
 	flock -s "${TRAMONE_folder}/.wind_GIS_layers_lock" grass -f --text "${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset}" --exec bash -c '
-	  base_map="$1"
-	  region="$2"
-	  d.erase bgcolor=white
-	  d.rast "$base_map"
-	  d.vect checkpoints color="240:133:144" fill_color=none width=2 where="checkpoint LIKE '\''%S%'\''"
-	  rows=$(g.region -p | awk -F": *" "/^rows:/{print \$2}")
-	  cols=$(g.region -p | awk -F": *" "/^cols:/{print \$2}")
-	  nsres=$(g.region -p | awk -F": *" "/^nsres:/{print \$2}")
-	  ewres=$(g.region -p | awk -F": *" "/^ewres:/{print \$2}")
-	  ns=$(echo "$rows * $nsres" | bc)
-	  ew=$(echo "$cols * $ewres" | bc)
-	  if [ "$(echo "$ns > $ew" | bc)" -eq 1 ]; then
-	    arrow_res=$(echo "$ns / 50" | bc)
-	  else
-	    arrow_res=$(echo "$ew / 50" | bc)
-	  fi
-	  g.region res="$arrow_res" -a
-	  d.rast.arrow map=wd_inv type=compass magnitude_map=ws scale=1 skip=1 grid=none color="aqua"
-	  d.vect "site_${region}A_buf" color="20:56:127" fill_color="none" width=2
-	  d.vect "site_${region}B_buf" color="231:51:49" fill_color="none" width=2
-	  d.vect traj size=3 color=none fill_color="20:56:127" icon=basic/circle where="site='\''${region}A'\''"
-	  d.vect traj size=3 color=none fill_color="231:51:49" icon=basic/circle where="site='\''${region}B'\''"
-	  d.vect wind size=8 width=2 color="none" fill_color="aqua" icon=basic/circle
-	  v.label map=wind labels=ws column="ws" fontsize=7 color="aqua" reference=lower,left xoffset=4 yoffset=0 border="white" width=8
-	  d.labels ws
-	  v.label map=wind labels=wd column="wd" fontsize=7 color="aqua" reference=center,left xoffset=3 yoffset=5 border="white" width=8
-	  d.labels wd
-	  v.label map=wind labels=ws column="ws" fontsize=7 color="aqua" reference=lower,left xoffset=4 yoffset=0 border="white" width=8
-	  d.labels ws
-	  v.label map=wind labels=wd column="wd" fontsize=7 color="aqua" reference=center,left xoffset=3 yoffset=5 border="white" width=8
-	  d.labels wd
-	' _ "$base_map" "$region"
-	if ! pgrep -fa "feh ${TRAMONE_folder}/${png_name}"; then
-		feh ${TRAMONE_folder}/${png_name} &
-	fi
+		base_map="$1"
+		region="$2"
+		d.erase bgcolor=white
+		d.rast "$base_map"
+		d.vect checkpoints color="240:133:144" fill_color=none width=2 where="checkpoint LIKE '\''%S%'\''"
+		rows=$(g.region -p | awk -F": *" "/^rows:/{print \$2}")
+		cols=$(g.region -p | awk -F": *" "/^cols:/{print \$2}")
+		nsres=$(g.region -p | awk -F": *" "/^nsres:/{print \$2}")
+		ewres=$(g.region -p | awk -F": *" "/^ewres:/{print \$2}")
+		ns=$(echo "$rows * $nsres" | bc)
+		ew=$(echo "$cols * $ewres" | bc)
+		if [ "$(echo "$ns > $ew" | bc)" -eq 1 ]; then
+		arrow_res=$(echo "$ns / 50" | bc)
+		else
+		arrow_res=$(echo "$ew / 50" | bc)
+		fi
+		g.region res="$arrow_res" -a
+		d.rast.arrow map=wd_inv type=compass magnitude_map=ws scale=1 skip=1 grid=none color="aqua"
+		d.vect "site_${region}A_buf" color="20:56:127" fill_color="none" width=2
+		d.vect "site_${region}B_buf" color="231:51:49" fill_color="none" width=2
+		d.vect traj size=3 color=none fill_color="20:56:127" icon=basic/circle where="site='\''${region}A'\''"
+		d.vect traj size=3 color=none fill_color="231:51:49" icon=basic/circle where="site='\''${region}B'\''"
+		d.vect wind size=8 width=2 color="none" fill_color="aqua" icon=basic/circle
+		v.label map=wind labels=ws column="ws" fontsize=7 color="aqua" reference=lower,left xoffset=4 yoffset=0 border="white" width=8
+		d.labels ws
+		v.label map=wind labels=wd column="wd" fontsize=7 color="aqua" reference=center,left xoffset=3 yoffset=5 border="white" width=8
+		d.labels wd
+		v.label map=wind labels=ws column="ws" fontsize=7 color="aqua" reference=lower,left xoffset=4 yoffset=0 border="white" width=8
+		d.labels ws
+		v.label map=wind labels=wd column="wd" fontsize=7 color="aqua" reference=center,left xoffset=3 yoffset=5 border="white" width=8
+		d.labels wd
+		' _ "$base_map" "$region"
+
 }
 
 
@@ -169,6 +163,10 @@ map_maker() {
 #########################################################################
 # init start
 
+if [ -f "${TRAMONE_folder}/sampling_region_sites" ]; then
+	rm "${TRAMONE_folder}/sampling_region_sites"
+fi
+
 pinctrl set 4 op
 pinctrl set 4 dl
 
@@ -176,9 +174,8 @@ export GRASS_OVERWRITE=1
 
 sudo timedatectl set-timezone UTC
 
-if [ ! -d "${TRAMONE_folder}" ]; then
-	echo "FATAL!!! TRAMONE folder not found. Rebooting OS."
-	sudo reboot
+if [[ ! -d "$TRAMONE_folder" ]]; then
+	mkdir ${TRAMONE_folder}
 fi
 
 if [ -f "${TRAMONE_folder}/grassdata/cr-jtsk/TRAMONE/.gislock" ]; then
@@ -191,19 +188,20 @@ if [ ! -f "${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset}/sqlite/TRAMONE.db"
 fi
 grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec db.connect database=${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset}/sqlite/TRAMONE.db driver=sqlite
 
-grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_wgs84}/${mapset} --exec v.in.ascii input=${TRAMONE_folder}/Geography_2024_Radim.csv output=meteo_sites sep="," x=4 y=5 columns="Gh_id varchar(10),Name varchar(60),Station_type varchar(10),Geogr1 double,Geogr2 double,Elevation double" skip=1
-grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.proj location=${loc_wgs84} mapset=${mapset} input=meteo_sites out=meteo_sites 
-grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.out.ascii -c meteo_sites out=${TRAMONE_folder}/meteo_sites.txt columns="Gh_id,Elevation" separator=" "
+sampling_site_names=`grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.db.select ${sampling_sites_map} column=site|tail -n +2|sort|uniq`
+sampling_regions=`echo $sampling_site_names | tr ' ' '\n' | cut -c1 | sort -u | tr '\n' ' '`
+sampling_sites=$(echo "$sampling_site_names" | cut -c2 | sort -u)
 
-sampling_sites=`grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.db.select sampling_sites column=site|tail -n +2|sort|uniq`
-sampling_regions=`echo $sampling_sites | tr ' ' '\n' | cut -c1 | sort -u | tr '\n' ' '`
-
-grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.db.select sampling_sites columns="site,x,y,repre_range" sep="," | tail -n +2 > ${TRAMONE_folder}/sampling_sites.txt
+grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.db.select ${sampling_sites_map} columns="site,x,y,repre_range" sep="," | tail -n +2 > ${TRAMONE_folder}/sampling_sites.txt
 grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec g.region rast=${base_map}
 grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.in.region computing_area
 grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.buffer computing_area out=computing_area_buf distance=10000
-grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec r.mask -r
-grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec r.mask vect=computing_area_buf
+if grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec g.list type=raster pattern=MASK | grep -qx MASK; then
+	grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec r.mask -r
+	grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec r.mask vect=computing_area_buf
+else
+	grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec r.mask vect=computing_area_buf
+fi
 grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec r.univar ${dem}
 dem_min=$(grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec r.univar ${dem} | grep minimum:|awk '{print $2}')	
 dem_max=$(grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec r.univar ${dem} | grep maximum:|awk '{print $2}')	
@@ -212,14 +210,16 @@ grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset}  --exec r.map
 grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec r.mapcalc expression="v_wind=0" &
 wait
 
+echo $sampling_site_names
+
 # buffer for sampling sites and the creation of the sampler operation time file
-for site in $sampling_sites
+for site in $sampling_site_names
 do
 	if [ ! -d "${TRAMONE_folder}/MQTT/TRAMONE/${site}" ]; then
 		mkdir -p "${TRAMONE_folder}/MQTT/TRAMONE/${site}"
 	fi
-	grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.extract sampling_sites out=site_${site} where="site=='${site}'" 
-	repre_range=$(grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.db.select -c map=sampling_sites column=repre_range where="site=='${site}'")
+	grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.extract ${sampling_sites_map} out=site_${site} where="site=='${site}'" 
+	repre_range=$(grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.db.select -c map=${sampling_sites_map} column=repre_range where="site=='${site}'")
 	grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.buffer site_${site} out=site_${site}_buf distance=$repre_range
 	if [ ! -f "${TRAMONE_folder}/${site}_0" ]; then
 		echo "0.0" > ${TRAMONE_folder}/${site}_0
@@ -250,79 +250,51 @@ fi
 
 time_shp=0
 
-if [ -f "${TRAMONE_folder}/networking_on" ]; then
-	rm "${TRAMONE_folder}/networking_on"
-fi
-
 if [ -f "${TRAMONE_folder}/traj.txt" ]; then
 	sed -i '/,,,/d' ${TRAMONE_folder}/traj.txt
 fi
 
+lxterminal -T "TRAMONE MAIN (logs)" -e journalctl --user-unit=tramone_main.service -f --no-pager &
+lxterminal -T "TRAMONE NETWORKING (logs)" -e journalctl --user-unit=tramone_networking.service -f --no-pager &
+
 wind_gridding_pid=""
 sleep 1
+
+#waiting for display variables
+	export DISPLAY=${DISPLAY:-:0}
+	export XAUTHORITY=${XAUTHORITY:-/home/pi/.Xauthority}
+	until xdpyinfo >/dev/null 2>&1; do
+	  sleep 0.2
+	done
+
+SAMPLING_REGIONS=$(printf '%s\n' $sampling_regions | paste -sd, -)
+SAMPLING_SITES=$(printf '%s\n' $sampling_sites | paste -sd, -)
+systemctl --user set-environment SAMPLING_REGIONS="$SAMPLING_REGIONS" SAMPLING_SITES="$SAMPLING_SITES"
+systemd-notify --ready
+
+rm /home/pi/TRAMONE/networking_on
 
 ########################################################################
 # main loop start
 while :
 do
-	#check and restart networking
-	date_UTC=`date -u +"%Y-%m-%d %H:%M:%S"`
-	#if networking does not exist
-	if ! pgrep -f "networking.py" > /dev/null; then
-		if [ -f "${TRAMONE_folder}/networking_on" ]; then
-#			flock -x "${TRAMONE_folder}/.log_lock" -c 'echo "${date_UTC}|ALL|MAIN|NETWORKING|DEAD|ERR" >> ${TRAMONE_folder}/log.txt'
-			flock -x "${TRAMONE_folder}/.log_lock" -c "echo \"${date_UTC}|ALL|MAIN|NETWORKING|DEAD|ERR\" >> \"${TRAMONE_folder}/log.txt\""
-			rm "${TRAMONE_folder}/networking_on"
-		fi
-		lxterminal -e bash -c "python ${TRAMONE_folder}/networking.py" &
-		start_waiting_for_net_sec=`date -u +%s`
-		while [ ! -f "${TRAMONE_folder}/networking_on" ]
-		do
-			current_waiting_for_net_sec=`date -u +%s`
-			diff_waiting_for_net_sec=$(echo "$current_waiting_for_net_sec-$start_waiting_for_net_sec"|bc)
-			if (( diff_waiting_for_net_sec > 180 )); then
-				echo "Networking init failed!!! Rebooting OS."
-				#flock -x "${TRAMONE_folder}/.log_lock" -c 'echo "${date_UTC}|ALL|MAIN|NETWORKING|RESTART|ERR" >> ${TRAMONE_folder}/log.txt'
-				flock -x "${TRAMONE_folder}/.log_lock" -c "echo \"${date_UTC}|ALL|MAIN|NETWORKING|RESTART|ERR\" >> \"${TRAMONE_folder}/log.txt\""
-				sudo reboot
-			else
-				echo "Waiting for networking..."
-				sleep 1
-			fi
-		done
-		#flock -x "${TRAMONE_folder}/.log_lock" -c 'echo "${date_UTC}|ALL|MAIN|NETWORKING|RESTART|OK" >> ${TRAMONE_folder}/log.txt'
-		flock -x "${TRAMONE_folder}/.log_lock" -c "echo \"${date_UTC}|ALL|MAIN|NETWORKING|RESTART|OK\" >> \"${TRAMONE_folder}/log.txt\""
-	else 
-	#if networking hangs
-		time_now_sec=`TZ=UTC date +"%s"`
-		last_networking_loop_time=$(cat "${TRAMONE_folder}/last_networking_loop_time.txt")
-		if (( time_now_sec - last_networking_loop_time > 180 )); then
-			echo "No network response for 3 minutes! Connection lost? Restarting networking..."
-			#flock -x "${TRAMONE_folder}/.log_lock" -c 'echo "${date_UTC}|ALL|MAIN|NETWORKING|HANG|ERR" >> ${TRAMONE_folder}/log.txt'
-			flock -x "${TRAMONE_folder}/.log_lock" -c "echo \"${date_UTC}|ALL|MAIN|NETWORKING|HANG|ERR\" >> \"${TRAMONE_folder}/log.txt\""
-			sudo pkill -f networking.py
-			sleep 0.5
-			lxterminal -e bash -c "python ${TRAMONE_folder}/networking.py" &
-			start_waiting_for_net_sec=`date -u +%s`
-			while [ ! -f "${TRAMONE_folder}/networking_on" ]
-			do
-				current_waiting_for_net_sec=`date -u +%s`
-				diff_waiting_for_net_sec=$(echo "$current_waiting_for_net_sec-$start_waiting_for_net_sec"|bc)
-				if (( diff_waiting_for_net_sec > 180 )); then
-					echo "Networking init failed!!! Rebooting OS."
-					#flock -x "${TRAMONE_folder}/.log_lock" -c 'echo "${date_UTC}|ALL|MAIN|NETWORKING|RESTART|ERR" >> ${TRAMONE_folder}/log.txt'
-					flock -x "${TRAMONE_folder}/.log_lock" -c "echo \"${date_UTC}|ALL|MAIN|NETWORKING|RESTART|ERR\" >> \"${TRAMONE_folder}/log.txt\""
-					sudo reboot
-				else
-					echo "Waiting for networking..."
-					sleep 1
-				fi
-			done
-			#flock -x "${TRAMONE_folder}/.log_lock" -c 'echo "${date_UTC}|ALL|MAIN|NETWORKING|RESTART|OK" >> ${TRAMONE_folder}/log.txt'
-			flock -x "${TRAMONE_folder}/.log_lock" -c "echo \"${date_UTC}|ALL|MAIN|NETWORKING|RESTART|OK\" >> \"${TRAMONE_folder}/log.txt\""
-		fi
-	fi
 
+	date_UTC=`date -u +"%Y-%m-%d %H:%M:%S"`
+
+	#test the function of the networking
+	while [ ! -f "/home/pi/TRAMONE/networking_on" ]
+	do
+	    echo "Waiting for networking..."
+	    sleep 3
+	done
+	time_now=$(date +%s)
+	last_networking_time=$(stat -c %Y "/home/pi/TRAMONE/networking_on")
+	time_diff=$((time_now - last_networking_time))
+	if [ "$time_diff" -gt 180 ]; then
+	    echo "Network hangs !!!"
+		systemctl --user restart tramone_networking.service
+	fi
+	
 	#if wind field gridding finished, launch new gridding
 	if [[ -z "$wind_gridding_pid" ]] || ! kill -0 "$wind_gridding_pid" 2>/dev/null; then
 		wind_gridding &
@@ -342,13 +314,18 @@ do
 	while read radek
 	do
 		IFS="," read -r pairsite x y repre_range <<< ${radek}
-		repre_range=$(grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.db.select -c map=sampling_sites column=repre_range where="site=='${pairsite}'")
+		repre_range=$(grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.db.select -c map=${sampling_sites_map} column=repre_range where="site=='${pairsite}'")
 		echo "-----------------------------------"
 		echo $pairsite"|"$x"|"$y"|"$repre_range
 		echo "time_now_sec: " $time_now_sec
-		for i in {1..9}
-		#for i in {1..1}
-		do
+		pts_number=$(echo "-0.4 * $diff_time_sec + 15"|bc)
+		pts_number=$(printf "%.0f\n" "$pts_number")
+		if (( pts_number > 12 )); then
+			pts_number=12
+		elif (( pts_number < 1 )); then
+			pts_number=1
+		fi
+		for ((i=1; i<=pts_number; i++)); do
 			angle=$(echo "scale=6; 2 * 3.141593 * $RANDOM / 32767" | bc)
 			distance=$(echo "scale=6; $RANDOM / 32767 * $repre_range" | bc)
 			dx=$(echo "scale=6; $distance * c($angle)" | bc -l)
@@ -377,20 +354,43 @@ do
 		v.select ainput=traj binput=computing_area_buf operator=within output=traj_reg
 		# export zpět do ASCII (jen platné trajektorie)
 		v.db.select traj_reg columns="site,x_new,y_new,time,x,y,u_wind,v_wind,'"${checkpoint_columns}"',check_pass" where="'"${time_now_sec}"'-time<'"${max_traj_time}"'" separator="," | tail -n +2 > "'"${TRAMONE_folder}"'/traj.txt"
-		#read trajectory points at updated (moved) coordinates 
+		#read trajectory points at updated (moved) coordinates
+		'
+#remove corrupted lines (with no coords)
+	sed -i '/,,,/d' ${TRAMONE_folder}/traj.txt
+	flock -x "${TRAMONE_folder}/.wind_GIS_layers_lock" grass -f --text "${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset}" --exec bash -c '
 		v.in.ascii input="'"${TRAMONE_folder}"'/traj.txt" out=traj x=2 y=3 sep="," columns="site varchar(3),x real,y real,time integer,x_puv real,y_puv real,u_wind_prev real,v_wind_prev real,'"${checkpoint_columns}"',check_pass"
 		'
-		
-		
+	
+	traj_npoints=$(grass -f --text ${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset} --exec v.info traj | grep  "Number of points" |  grep -oP 'Number of points:\s+\K\d+')
+	echo "||||||||||||||||||||||||||"
+	echo $traj_npoints
+	echo "||||||||||||||||||||||||||"
+	if (( traj_npoints < 1 )); then
+		for region in $sampling_regions
+		do	
+			echo  "00" > "${TRAMONE_folder}/MQTT/TRAMONE/${region}A/request"
+			echo  "00" > "${TRAMONE_folder}/MQTT/TRAMONE/${region}B/request"	
+		done
+		echo "TRAJECTORIES CORRUPTED!!! PROGRAM STOPPED!!!"
+		while :
+		do
+			sleep 1
+		done
+	fi
+
 
 #draw the maps (mapmaker function)
 	pids=()
 	for region in $sampling_regions; do
-	  png_name="tramone_${region}.png"
-	  base_map="bg_map_${region}_grey"
-	  grass -f --text "${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset}" --exec g.region raster="${base_map}" -a save="mapmaker_region_${region}"
-	  map_maker &
-	  pids+=($!)
+		png_name="tramone_${region}.png"
+		base_map="bg_map_${region}"
+		grass -f --text "${TRAMONE_folder}/${grassdb}/${loc_jtsk}/${mapset}" --exec g.region raster="${base_map}" -a save="mapmaker_region_${region}"
+		map_maker &
+		pids+=($!)
+		if ! pgrep -fa "${TRAMONE_folder}/tramone_${region}.png"; then
+			feh "${TRAMONE_folder}/tramone_${region}.png" &
+		fi
 	done
 	wait "${pids[@]}"
 	#hourly wind and map saving
@@ -508,8 +508,8 @@ do
 			else
 				sampling_start_time=0
 			fi
-			# the condition to protect samplers (at least 3 min of operation before switching off)
-			if (( sampling_start_time < $(date +%s) - 180 )); then
+			# the condition to protect samplers (sample 1 min after last request before switching off)
+			if (( sampling_start_time < $(date +%s) - 60 )); then
 				echo  "00" > "${TRAMONE_folder}/MQTT/TRAMONE/${region}A/request"
 				echo  "00" > "${TRAMONE_folder}/MQTT/TRAMONE/${region}B/request"
 				echo "No sampling ${region}A <-> ${region}S <-> ${region}B"
