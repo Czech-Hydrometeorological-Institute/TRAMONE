@@ -43,6 +43,11 @@ client/
                               emulation), station heating control, diagnostics reporting
 
 data/                        example result tables (elemental/ionic concentrations)
+
+vyhodnocení/                 standalone data-processing tools (Czech), e.g. computing
+                              per-filter sampling duration/volume from the server log
+                              — see vyhodnocení/README.md
+
 LICENSE                      GNU GPLv3
 ```
 
