@@ -6,8 +6,7 @@ Samostatné nástroje pro zpracování dat naměřených systémem TRAMONE, dopl
 ## filter_sampling_volume.py
 
 Spočítá dobu odběru a odebraný objem vzdušiny pro jednotlivé filtry (vzorky) na
-základě analýzy provozního (systémového) logu serveru — přesně postup popsaný ve
-výzkumné zprávě projektu (kap. 5.1):
+základě analýzy provozního (systémového) logu serveru:
 
 > Množství odebrané vzdušiny je nutno pro jednotlivé vzorky zjistit analýzou
 > systémového logu, který zahrnuje informaci o času výměny filtrů v jednotlivých
