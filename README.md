@@ -44,6 +44,8 @@ client/
 
 data/                        example result tables (elemental/ionic concentrations)
 
+docs/                        methodology (PDF, Czech original and English translation)
+
 vyhodnocení/                 standalone data-processing tools (Czech), e.g. computing
                               per-filter sampling duration/volume from the server log
                               — see vyhodnocení/README.md
@@ -103,8 +105,17 @@ actual credentials before deployment. Do not commit real credentials back to thi
 project region; regenerate them for each new deployment (station/site coordinates are
 region-specific).
 
+## Methodology
+
+The methodology (TAČR SS07010003 result type NmetS) describes the concept, system operation,
+installation, station siting, campaign design, data evaluation and the verification of the
+method in four test deployments (2024–2026):
+
+- [Metodika monitoringu atmosférického aerosolu řízeného trajektoriemi částic (CZ, PDF)](docs/TRAMONE_metodika_CZ.pdf) – original
+- [Methodology for Trajectory-Driven Monitoring of Atmospheric Aerosol (EN, PDF)](docs/TRAMONE_methodology_EN.pdf) – English translation; the Czech original is authoritative
+
 ## Background
 
 Method, validation and results from four test deployments (2024–2026) are described in the
-project's final report (Souhrnná výzkumná zpráva z monitoringu atmosférického aerosolu řízeného
-trajektoriemi částic, ČHMÚ, TAČR SS07010003).
+methodology above and in detail in the project's final report (Souhrnná výzkumná zpráva
+z monitoringu atmosférického aerosolu řízeného trajektoriemi částic, ČHMÚ, TAČR SS07010003).
